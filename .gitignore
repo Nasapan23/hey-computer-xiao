@@ -1,0 +1,7 @@
+server/.venv/
+server/recordings/
+training/.venv/
+training/output/
+dataset/processed/**/*.wav
+__pycache__/
+*.py[cod]
