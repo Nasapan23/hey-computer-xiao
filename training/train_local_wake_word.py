@@ -1,9 +1,21 @@
 from __future__ import annotations
 
+"""Train a compact TinyML wake-word model and export ESP32-ready artifacts.
+
+Training flow (high level):
+1. Read long WAV recordings from dataset/raw/* and resample to 16 kHz.
+2. Slice each recording into overlapping 2-second windows.
+3. Select useful windows, preprocess, and split by source file (no leakage).
+4. Balance classes with light augmentation, then extract 64 energy features.
+5. Train a small dense network, evaluate, export TFLite int8 and model header.
+6. Save a report with metrics, confusion matrix, and layer configuration.
+"""
+
 import argparse
 import json
 import math
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -136,6 +148,7 @@ def make_dataset(
     max_windows_per_file: int,
     apply_rms_normalization: bool,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[dict]]:
+    """Build window-level dataset and a manifest from source WAV recordings."""
     examples = []
     targets = []
     sources = []
@@ -192,6 +205,7 @@ def split_dataset(
     source_ids: np.ndarray,
     seed: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Split train/test by source file so windows from one file never leak across splits."""
     # Split by source file, not by individual windows, to avoid train/test leakage.
     rng = np.random.default_rng(seed)
     train_mask = np.zeros(len(y), dtype=bool)
@@ -258,6 +272,7 @@ def oversample_and_augment(
     y_train: np.ndarray,
     seed: int,
 ) -> tuple[np.ndarray, np.ndarray]:
+    """Balance classes by augmenting minority-class windows until counts match."""
     rng = np.random.default_rng(seed)
     class_indices = {label: np.where(y_train == label)[0] for label in range(len(LABELS))}
     target_count = max(len(indices) for indices in class_indices.values())
@@ -289,6 +304,8 @@ def oversample_and_augment(
 
 
 def build_model() -> tf.keras.Model:
+    """Create a tiny dense classifier suitable for TFLite Micro deployment."""
+    # Keep architecture intentionally small so it runs on ESP32S3 with TFLite Micro.
     model = tf.keras.Sequential(
         [
             tf.keras.layers.Input(shape=(FEATURE_COUNT,)),
@@ -304,6 +321,94 @@ def build_model() -> tf.keras.Model:
         metrics=["accuracy"],
     )
     return model
+
+
+def make_confusion_matrix(y_true: np.ndarray, y_pred: np.ndarray, class_count: int) -> np.ndarray:
+    matrix = np.zeros((class_count, class_count), dtype=np.int64)
+    for true_label, pred_label in zip(y_true.astype(np.int64), y_pred.astype(np.int64)):
+        matrix[int(true_label), int(pred_label)] += 1
+    return matrix
+
+
+def compute_per_class_metrics(confusion_matrix: np.ndarray) -> list[dict]:
+    total = int(np.sum(confusion_matrix))
+    metrics = []
+
+    for label_index, label in enumerate(LABELS):
+        tp = int(confusion_matrix[label_index, label_index])
+        fn = int(np.sum(confusion_matrix[label_index, :]) - tp)
+        fp = int(np.sum(confusion_matrix[:, label_index]) - tp)
+        tn = total - tp - fn - fp
+
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1 = (2.0 * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+
+        metrics.append(
+            {
+                "label": label,
+                "support": int(np.sum(confusion_matrix[label_index, :])),
+                "tp": tp,
+                "fp": fp,
+                "fn": fn,
+                "tn": tn,
+                "precision": precision,
+                "recall": recall,
+                "f1_score": f1,
+            }
+        )
+
+    return metrics
+
+
+def describe_model_layers(model: tf.keras.Model) -> list[dict]:
+    layers = []
+    for layer in model.layers:
+        layer_config = layer.get_config()
+        try:
+            output_shape = tf.TensorShape(layer.output.shape).as_list()
+        except Exception:
+            output_shape = None
+
+        layers.append(
+            {
+                "name": layer.name,
+                "type": layer.__class__.__name__,
+                "output_shape": output_shape,
+                "params": int(layer.count_params()),
+                "units": layer_config.get("units"),
+                "activation": layer_config.get("activation"),
+            }
+        )
+
+    return layers
+
+
+def write_confusion_matrix_csv(output_dir: Path, confusion_matrix: np.ndarray) -> Path:
+    csv_path = output_dir / "confusion_matrix.csv"
+    lines = ["," + ",".join(f"pred_{label}" for label in LABELS)]
+    for row_index, label in enumerate(LABELS):
+        row_values = ",".join(str(int(value)) for value in confusion_matrix[row_index])
+        lines.append(f"true_{label},{row_values}")
+    csv_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return csv_path
+
+
+def write_model_summary_text(output_dir: Path, model: tf.keras.Model) -> Path:
+    summary_path = output_dir / "model_summary.txt"
+    summary_lines: list[str] = []
+    model.summary(print_fn=summary_lines.append)
+    summary_path.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
+    return summary_path
+
+
+def print_confusion_matrix(confusion_matrix: np.ndarray) -> None:
+    print("Confusion matrix (rows=true, cols=pred):")
+    header = " " * 18 + " ".join(f"{label:>12}" for label in LABELS)
+    print(header)
+    for row_index, label in enumerate(LABELS):
+        row_values = " ".join(f"{int(value):>12}" for value in confusion_matrix[row_index])
+        print(f"{label:>18} {row_values}")
 
 
 def export_tflite(model: tf.keras.Model, representative_x: np.ndarray, output_path: Path) -> bytes:
@@ -370,11 +475,21 @@ def save_training_report(
     manifest: list[dict],
     history: tf.keras.callbacks.History,
     evaluation: list[float],
+    confusion_matrix: np.ndarray,
+    per_class_metrics: list[dict],
+    model: tf.keras.Model,
     train_count: int,
     test_count: int,
     apply_rms_normalization: bool,
 ) -> None:
+    """Persist all training metadata needed for debugging and report writing."""
+    training_history = {key: [float(value) for value in values] for key, values in history.history.items()}
+    model_layers = describe_model_layers(model)
+    confusion_csv_path = write_confusion_matrix_csv(output_dir, confusion_matrix)
+    model_summary_path = write_model_summary_text(output_dir, model)
+
     report = {
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "labels": LABELS,
         "sample_rate": SAMPLE_RATE,
         "window_seconds": WINDOW_SECONDS,
@@ -388,6 +503,20 @@ def save_training_report(
         "test_loss": float(evaluation[0]),
         "test_accuracy": float(evaluation[1]),
         "epochs_ran": len(history.history["loss"]),
+        "training_history": training_history,
+        "model": {
+            "total_params": int(model.count_params()),
+            "trainable_params": int(np.sum([np.prod(v.shape) for v in model.trainable_weights])),
+            "non_trainable_params": int(np.sum([np.prod(v.shape) for v in model.non_trainable_weights])),
+            "layers": model_layers,
+            "summary_path": str(model_summary_path),
+        },
+        "confusion_matrix": {
+            "labels": LABELS,
+            "rows_true_cols_pred": confusion_matrix.tolist(),
+            "csv_path": str(confusion_csv_path),
+        },
+        "per_class_metrics": per_class_metrics,
         "files": manifest,
     }
     (output_dir / "training_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
@@ -412,11 +541,17 @@ def main() -> None:
         shutil.rmtree(processed_dir)
     processed_dir.mkdir(parents=True, exist_ok=True)
 
+    # 1) Build raw waveform dataset from long recordings.
     print("Loading WAV files and selecting 2 second windows from your longer recordings...")
     x, y, source_ids, manifest = make_dataset(args.dataset, args.max_windows_per_file, args.normalize_rms)
+
+    # 2) Split by source file ID to avoid leakage between train and test.
     x_train, y_train, x_test, y_test = split_dataset(x, y, source_ids, args.seed)
+
+    # 3) Balance labels by oversampling minority class with lightweight augmentation.
     x_train, y_train = oversample_and_augment(x_train, y_train, args.seed)
 
+    # 4) Convert waveforms into compact energy features expected by the tiny model.
     x_train_model = extract_feature_batch(x_train)
     x_test_model = extract_feature_batch(x_test)
 
@@ -424,6 +559,7 @@ def main() -> None:
     for label_index, label in enumerate(LABELS):
         print(f"  {label}: {int(np.sum(y == label_index))} windows")
 
+    # 5) Train small dense model.
     model = build_model()
     model.summary()
 
@@ -445,9 +581,15 @@ def main() -> None:
         verbose=2,
     )
 
+    # 6) Evaluate on held-out test set and compute confusion matrix.
     evaluation = model.evaluate(x_test_model, y_test, verbose=0)
     print(f"Test accuracy: {evaluation[1]:.3f}")
+    y_pred = np.argmax(model.predict(x_test_model, verbose=0), axis=1)
+    confusion_matrix = make_confusion_matrix(y_test, y_pred, len(LABELS))
+    per_class_metrics = compute_per_class_metrics(confusion_matrix)
+    print_confusion_matrix(confusion_matrix)
 
+    # 7) Export artifacts for both Python and Arduino/TinyML firmware.
     keras_path = args.output / "wake_word_model.keras"
     tflite_path = args.output / "wake_word_model_int8.tflite"
     header_path = Path("esp32_tinyml_wake_word") / "model_data.h"
@@ -455,12 +597,25 @@ def main() -> None:
     model.save(keras_path)
     tflite_model = export_tflite(model, x_train_model, tflite_path)
     write_model_header(tflite_model, header_path)
-    save_training_report(args.output, manifest, history, evaluation, len(x_train_model), len(x_test_model), args.normalize_rms)
+    save_training_report(
+        args.output,
+        manifest,
+        history,
+        evaluation,
+        confusion_matrix,
+        per_class_metrics,
+        model,
+        len(x_train_model),
+        len(x_test_model),
+        args.normalize_rms,
+    )
 
     print()
     print(f"Saved Keras model: {keras_path}")
     print(f"Saved int8 TFLite model: {tflite_path}")
     print(f"Generated Arduino model header: {header_path}")
+    print(f"Saved confusion matrix CSV: {args.output / 'confusion_matrix.csv'}")
+    print(f"Saved model summary: {args.output / 'model_summary.txt'}")
     print("Next: open esp32_tinyml_wake_word/esp32_tinyml_wake_word.ino and flash it.")
 
 

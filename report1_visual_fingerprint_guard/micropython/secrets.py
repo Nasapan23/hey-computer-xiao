@@ -1,3 +1,0 @@
-WIFI_SSID = "nisipeanu"
-WIFI_PASSWORD = "12345678"
-

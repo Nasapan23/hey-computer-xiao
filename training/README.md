@@ -14,6 +14,11 @@ dataset/raw/unknown_speech/
 dataset/raw/background_noise/
 ```
 
+Model classes:
+
+- `wake_word`
+- `not_wake` (combined from `unknown_speech` + `background_noise`)
+
 The script accepts common WAV sample rates and resamples to `16000 Hz`.
 
 ## Run Training
@@ -39,6 +44,8 @@ python training\train_local_wake_word.py
 training/output/wake_word_model.keras
 training/output/wake_word_model_int8.tflite
 training/output/training_report.json
+training/output/confusion_matrix.csv
+training/output/model_summary.txt
 esp32_tinyml_wake_word/model_data.h
 ```
 
@@ -71,6 +78,12 @@ The trainer now uses:
 - file-level train/test split: windows from the same original file never appear in both train and test
 - class balancing with augmentation: minority classes are oversampled using small gain changes, small time shifts, and light noise
 - cleaned processed previews: `dataset/processed/` is regenerated on each run
+
+`training_report.json` also records:
+
+- epoch-by-epoch training/validation metrics
+- full model layer details (params, shapes, activations)
+- confusion matrix and per-class metrics
 
 ## Important Dataset Tip
 

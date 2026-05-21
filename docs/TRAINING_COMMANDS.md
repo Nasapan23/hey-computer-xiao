@@ -37,8 +37,12 @@ Listen to those selected chunks to confirm the wake-word chunks contain the full
 training/output/wake_word_model.keras
 training/output/wake_word_model_int8.tflite
 training/output/training_report.json
+training/output/confusion_matrix.csv
+training/output/model_summary.txt
 esp32_tinyml_wake_word/model_data.h
 ```
+
+`training_report.json` includes model layer details and confusion-matrix metrics.
 
 Flash:
 

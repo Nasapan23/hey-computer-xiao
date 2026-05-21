@@ -1,9 +1,0 @@
-pc/.venv/
-__pycache__/
-*.pyc
-data/normal_frames/*.jpg
-data/normal_frames/*.jpeg
-data/normal_frames/*.png
-data/models/*.joblib
-data/models/*.json
-

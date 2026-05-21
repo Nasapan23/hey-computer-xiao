@@ -73,6 +73,11 @@ dataset/raw/unknown_speech/
 dataset/raw/background_noise/
 ```
 
+The model output is binary:
+
+- `wake_word`
+- `not_wake` (built from both `unknown_speech` and `background_noise`)
+
 Your current files can be 3-10 seconds long.
 
 Best format:
@@ -107,6 +112,8 @@ Training creates:
 training/output/wake_word_model.keras
 training/output/wake_word_model_int8.tflite
 training/output/training_report.json
+training/output/confusion_matrix.csv
+training/output/model_summary.txt
 esp32_tinyml_wake_word/model_data.h
 dataset/processed/
 ```
@@ -185,8 +192,8 @@ For every inference:
 
 1. Convert raw microphone samples to the model input.
 2. Run TensorFlow Lite Micro.
-3. Print scores for `wake_word`, `unknown_speech`, and `background_noise`.
-4. If `wake_word > 0.85`, accept the wake event.
+3. Print scores for `wake_word` and `not_wake`.
+4. If `wake_word > WAKE_WORD_THRESHOLD`, accept the wake event.
 5. Turn LED on.
 6. Send a wake-word ping to the PC with HTTP POST `/ping`.
 7. Turn LED off.
@@ -196,7 +203,7 @@ For every inference:
 In the ESP32 sketch:
 
 ```cpp
-constexpr float WAKE_WORD_THRESHOLD = 0.85f;
+constexpr float WAKE_WORD_THRESHOLD = 0.55f;
 constexpr uint32_t WAKE_DEBOUNCE_MS = 3000;
 ```
 
@@ -208,6 +215,13 @@ STRIDE_SECONDS = 0.25
 ```
 
 Use `2.0` seconds for "hey computer". A 1 second window can cut the phrase too much.
+
+`training/output/training_report.json` now includes:
+
+- training history per epoch
+- layer-by-layer model details (type, params, output shape, activation)
+- confusion matrix values
+- per-class precision/recall/F1
 
 ## If Training Looks Bad
 
