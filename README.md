@@ -11,9 +11,9 @@ Flow:
 3. The trainer exports an int8 TinyML model as `model_data.h`.
 4. Flash the XIAO ESP32S3 Sense with the Arduino TinyML sketch.
 5. Run the Python PC server.
-6. Say "hey computer". The ESP32 detects it and sends a ping to the PC.
+6. Say "hey computer". If it matches the authorized user's voice, the ESP32 sends a ping, records the next 5 seconds, and uploads that audio to the PC.
 
-The ESP32 does not do speech-to-text. It only detects the wake word and forwards a ping event.
+The ESP32 does not do speech-to-text. It detects authorized wake, unknown-user wake, or not-wake, then uploads command audio only after an authorized wake.
 
 ## Your 3-10 Second Recordings Are OK
 
@@ -28,7 +28,7 @@ The local trainer scans each WAV file using overlapping 2 second windows:
 ...
 ```
 
-For `wake_word` and `unknown_speech`, it keeps the loudest windows from each file. This usually keeps the part where you spoke.
+For `authorized_user_wake`, `unknown_user_wake`, and `unknown_speech`, it keeps the loudest windows from each file. This usually keeps the part where someone spoke.
 
 For `background_noise`, it keeps windows spread across the whole file.
 
@@ -38,7 +38,7 @@ The selected chunks are written to:
 dataset/processed/
 ```
 
-Listen to those files after training starts. If a `wake_word` chunk does not contain the full "hey computer" phrase, trim or re-record that source file.
+Listen to those files after training starts. If a wake chunk does not contain the full "hey computer" phrase, trim or re-record that source file.
 
 ## Folder Layout
 
@@ -46,37 +46,62 @@ Listen to those files after training starts. If a `wake_word` chunk does not con
 .
 |-- dataset/
 |   |-- raw/
-|   |   |-- wake_word/
+|   |   |-- authorized_user_wake/
+|   |   |-- unknown_user_wake/
 |   |   |-- unknown_speech/
 |   |   `-- background_noise/
 |   `-- processed/
 |-- training/
 |   |-- train_local.bat
 |   |-- train_local_wake_word.py
+|   |-- wake_word/
+|   |   |-- config.py
+|   |   |-- dataset.py
+|   |   |-- features.py
+|   |   |-- model.py
+|   |   |-- pipeline.py
+|   |   `-- reports.py
 |   `-- requirements.txt
 |-- esp32_tinyml_wake_word/
 |   |-- esp32_tinyml_wake_word.ino
+|   |-- audio_runtime.h
+|   |-- tinyml_runtime.h
+|   |-- network_client.h
+|   |-- collection_mode.h
+|   |-- wake_detection.h
 |   `-- model_data.h          created by training
 `-- server/
     |-- main.py
+    |-- wake_server/
+    |   |-- app.py
+    |   |-- routes.py
+    |   |-- audio_io.py
+    |   |-- config.py
+    |   `-- state.py
     |-- run_server.bat
     `-- test_upload.py
 ```
+
+`train_local_wake_word.py`, `server/main.py`, and `esp32_tinyml_wake_word.ino` are short entry points. Implementation details live in smaller files beside them.
 
 ## Step 1: Check Dataset Folders
 
 Use exactly these labels:
 
 ```text
-dataset/raw/wake_word/
+dataset/raw/authorized_user_wake/
+dataset/raw/unknown_user_wake/
 dataset/raw/unknown_speech/
 dataset/raw/background_noise/
 ```
 
-The model output is binary:
+The trainer also accepts old files in `dataset/raw/wake_word/` as authorized-user wake clips.
 
-- `wake_word`
-- `not_wake` (built from both `unknown_speech` and `background_noise`)
+The model outputs three classes:
+
+- `authorized_user_wake`: your voice saying "hey computer"
+- `unknown_user_wake`: someone else saying "hey computer"
+- `not_wake`: other speech and background noise
 
 Your current files can be 3-10 seconds long.
 
@@ -85,7 +110,8 @@ Best format:
 - WAV
 - mono or stereo is OK
 - 16000 Hz preferred, but the trainer can resample
-- `wake_word` files should contain the phrase somewhere inside the recording
+- `authorized_user_wake` files should contain you saying the wake phrase
+- `unknown_user_wake` files should contain other people saying the wake phrase
 - `unknown_speech` files should contain speech that is not the wake phrase
 - `background_noise` files should contain no speech
 
@@ -113,6 +139,10 @@ training/output/wake_word_model.keras
 training/output/wake_word_model_int8.tflite
 training/output/training_report.json
 training/output/confusion_matrix.csv
+training/output/confusion_matrix.png
+training/output/training_curves.png
+training/output/class_distribution.png
+training/output/per_class_metrics.png
 training/output/model_summary.txt
 esp32_tinyml_wake_word/model_data.h
 dataset/processed/
@@ -156,6 +186,12 @@ Check current wake-word count:
 http://127.0.0.1:8000/counter
 ```
 
+Open the live signal + command-audio monitor:
+
+```text
+http://127.0.0.1:8000/ui
+```
+
 ## Step 4: Flash the ESP32
 
 Open:
@@ -170,6 +206,7 @@ Edit these values:
 const char *WIFI_SSID = "YOUR_WIFI_SSID";
 const char *WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 const char *PC_SERVER_PING_URL = "http://192.168.1.50:8000/ping";
+const char *PC_SERVER_UPLOAD_URL = "http://192.168.1.50:8000/upload";
 ```
 
 Use your PC's real LAN IP address. Do not use `localhost`.
@@ -186,24 +223,26 @@ Arduino IDE setup:
 
 ## What the ESP32 Does
 
-The firmware continuously keeps a 2 second audio window from the onboard microphone.
+The firmware continuously keeps a rolling 2 second audio window from the onboard microphone and advances it every 0.25 seconds.
 
 For every inference:
 
 1. Convert raw microphone samples to the model input.
 2. Run TensorFlow Lite Micro.
-3. Print scores for `wake_word` and `not_wake`.
-4. If `wake_word > WAKE_WORD_THRESHOLD`, accept the wake event.
-5. Turn LED on.
-6. Send a wake-word ping to the PC with HTTP POST `/ping`.
-7. Turn LED off.
+3. Score `authorized_user_wake`, `unknown_user_wake`, and `not_wake`.
+4. If authorized wake wins with enough confidence, send `/ping`.
+5. Record the next 5 seconds of audio.
+6. Upload that command audio with HTTP POST `/upload`.
+7. If unknown-user wake wins, log/reject it without uploading command audio.
 
 ## Settings You May Change
 
 In the ESP32 sketch:
 
 ```cpp
-constexpr float WAKE_WORD_THRESHOLD = 0.55f;
+constexpr float AUTHORIZED_WAKE_THRESHOLD = 0.65f;
+constexpr float UNKNOWN_USER_WAKE_THRESHOLD = 0.65f;
+constexpr float COMMAND_CAPTURE_SECONDS = 5.0f;
 constexpr uint32_t WAKE_DEBOUNCE_MS = 3000;
 ```
 
@@ -227,7 +266,7 @@ Use `2.0` seconds for "hey computer". A 1 second window can cut the phrase too m
 
 Check `dataset/processed/`.
 
-If the selected `wake_word` chunks do not contain the full phrase:
+If the selected wake chunks do not contain the full phrase:
 
 - trim the original recording closer to the phrase, or
 - record shorter wake-word clips, or
@@ -241,7 +280,8 @@ python training\train_local_wake_word.py --max-windows-per-file 8
 
 If the ESP32 triggers too easily:
 
-- raise `WAKE_WORD_THRESHOLD` to `0.90`
+- raise `AUTHORIZED_WAKE_THRESHOLD`
+- add more `unknown_user_wake` clips from other people
 - add more `unknown_speech`
 - add more `background_noise`
 - retrain and flash again
@@ -260,12 +300,14 @@ constexpr DeviceMode DEVICE_MODE = MODE_COLLECT_DATA;
 3. Flash the board and open Serial Monitor at `115200`.
 4. Use Serial commands:
 
-- `w` -> capture/upload one `wake` clip
+- `a` -> capture/upload one `authorized_user_wake` clip from you
+- `u` -> capture/upload one `unknown_user_wake` clip from someone else saying "hey computer"
 - `n` -> capture/upload one `not_wake` clip
 - `h` -> show commands
 
 Uploaded clips are saved to:
 
 - `server/recordings/collected/<label>/...`
-- `dataset/raw/wake_word/...` for `wake`
+- `dataset/raw/authorized_user_wake/...` for authorized wake
+- `dataset/raw/unknown_user_wake/...` for unknown-user wake
 - `dataset/raw/unknown_speech/...` for `not_wake`

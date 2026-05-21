@@ -2,6 +2,12 @@
 
 This project trains locally with TensorFlow. Edge Impulse is not required.
 
+The current model has three classes:
+
+- `authorized_user_wake`
+- `unknown_user_wake`
+- `not_wake`
+
 ## Install and Train
 
 From the repo root:

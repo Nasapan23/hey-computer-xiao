@@ -5,3 +5,4 @@ training/output/
 dataset/processed/**/*.wav
 __pycache__/
 *.py[cod]
+build/

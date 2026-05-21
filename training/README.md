@@ -9,15 +9,19 @@ Your WAV files can be 3 to 10 seconds long. The training script automatically se
 Put WAV files here:
 
 ```text
-dataset/raw/wake_word/
+dataset/raw/authorized_user_wake/
+dataset/raw/unknown_user_wake/
 dataset/raw/unknown_speech/
 dataset/raw/background_noise/
 ```
 
 Model classes:
 
-- `wake_word`
-- `not_wake` (combined from `unknown_speech` + `background_noise`)
+- `authorized_user_wake`: your voice saying "hey computer"
+- `unknown_user_wake`: someone else saying "hey computer"
+- `not_wake`: combined from `unknown_speech` + `background_noise`
+
+Old clips in `dataset/raw/wake_word/` are still accepted as `authorized_user_wake`.
 
 The script accepts common WAV sample rates and resamples to `16000 Hz`.
 
@@ -38,6 +42,33 @@ pip install -r training\requirements.txt
 python training\train_local_wake_word.py
 ```
 
+Default training now runs for `100` epochs (with early stopping enabled).  
+To override:
+
+```powershell
+python training\train_local_wake_word.py --epochs 40
+```
+
+## Code Layout
+
+```text
+training/
+|-- train_local_wake_word.py   command-line entry point
+|-- train_local.bat            Windows launcher
+|-- requirements.txt
+`-- wake_word/
+    |-- config.py              labels and audio/model constants
+    |-- audio.py               WAV loading, windowing, preview writing
+    |-- dataset.py             dataset manifest and train/test split
+    |-- augmentation.py        balancing and light audio augmentation
+    |-- features.py            ESP32-matched voice features
+    |-- model.py               Keras model architecture
+    |-- metrics.py             confusion matrix and class metrics
+    |-- export.py              TFLite + model_data.h export
+    |-- reports.py             JSON/CSV/text training reports
+    `-- pipeline.py            end-to-end training workflow
+```
+
 ## What the Script Creates
 
 ```text
@@ -45,6 +76,10 @@ training/output/wake_word_model.keras
 training/output/wake_word_model_int8.tflite
 training/output/training_report.json
 training/output/confusion_matrix.csv
+training/output/confusion_matrix.png
+training/output/training_curves.png
+training/output/class_distribution.png
+training/output/per_class_metrics.png
 training/output/model_summary.txt
 esp32_tinyml_wake_word/model_data.h
 ```
@@ -61,7 +96,7 @@ The ESP32 model input is 2 seconds of audio:
 
 For each longer WAV file, the script creates overlapping 2 second windows every 0.25 seconds.
 
-For `wake_word` and `unknown_speech`, it keeps the loudest windows from each file. This helps when your file contains silence before or after the spoken phrase.
+For `authorized_user_wake`, `unknown_user_wake`, and `unknown_speech`, it keeps the loudest windows from each file. This helps when your file contains silence before or after the spoken phrase.
 
 For `background_noise`, it keeps windows spread across the file.
 
@@ -85,13 +120,21 @@ The trainer now uses:
 - full model layer details (params, shapes, activations)
 - confusion matrix and per-class metrics
 
+And the trainer now exports visual artifacts in `training/output/`:
+
+- `confusion_matrix.png`
+- `training_curves.png`
+- `class_distribution.png`
+- `per_class_metrics.png`
+
 ## Important Dataset Tip
 
-If a `wake_word` WAV is 10 seconds long but contains the wake word only once, the script will try to pick the loud 2 second area that contains the phrase. This is okay for a first experiment.
+If a wake WAV is 10 seconds long but contains the wake word only once, the script will try to pick the loud 2 second area that contains the phrase. This is okay for a first experiment.
 
 Still, the best training files are not huge recordings. Best first version:
 
-- `wake_word`: each file should contain one clear "hey computer", with some silence before or after
+- `authorized_user_wake`: each file should contain your clear "hey computer", with some silence before or after
+- `unknown_user_wake`: each file should contain another person saying "hey computer"
 - `unknown_speech`: each file should contain other spoken words
 - `background_noise`: each file should contain no speech
 
@@ -119,17 +162,19 @@ With your current dataset size, accuracy can jump around a lot because there are
 
 First checks:
 
-1. Open `dataset/processed/wake_word/`.
-2. Listen to several selected chunks.
-3. Confirm each one contains the full wake phrase.
-4. Open `dataset/processed/unknown_speech/`.
-5. Confirm those do not contain the wake phrase.
-6. Open `dataset/processed/background_noise/`.
-7. Confirm those contain no speech.
+1. Open `dataset/processed/authorized_user_wake/`.
+2. Confirm those chunks contain you saying the full wake phrase.
+3. Open `dataset/processed/unknown_user_wake/`.
+4. Confirm those chunks contain someone else saying the full wake phrase.
+5. Open `dataset/processed/unknown_speech/`.
+6. Confirm those do not contain the wake phrase.
+7. Open `dataset/processed/background_noise/`.
+8. Confirm those contain no speech.
 
 Then improve the data:
 
-- Add more `wake_word` recordings.
+- Add more `authorized_user_wake` recordings from you.
+- Add more `unknown_user_wake` recordings from other people.
 - Add more `unknown_speech` recordings that sound similar but are not the wake phrase.
 - Add more background recordings from the same room.
 - Retrain.
