@@ -82,6 +82,20 @@ class WhisperTranscriber:
             with self._transcribe_lock:
                 segments, info = model.transcribe(str(wav_path), **transcribe_kwargs)
                 transcript = " ".join(segment.text.strip() for segment in segments if segment.text and segment.text.strip()).strip()
+                if not transcript:
+                    fallback_kwargs = dict(transcribe_kwargs)
+                    fallback_kwargs["beam_size"] = 3
+                    fallback_kwargs["vad_filter"] = False
+                    fallback_kwargs.pop("language", None)
+                    fallback_kwargs["no_speech_threshold"] = 0.95
+                    fallback_kwargs["log_prob_threshold"] = -2.0
+                    fallback_segments, fallback_info = model.transcribe(str(wav_path), **fallback_kwargs)
+                    fallback_transcript = " ".join(
+                        segment.text.strip() for segment in fallback_segments if segment.text and segment.text.strip()
+                    ).strip()
+                    if fallback_transcript:
+                        transcript = fallback_transcript
+                        info = fallback_info
         except Exception as exc:
             return {
                 "transcription_status": "error",

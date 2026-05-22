@@ -264,13 +264,13 @@ float output_score(int index) {
   return 0.0f;
 }
 
-void print_scores() {
+void print_scores(const float *scores) {
   Serial.print("Predictions:");
   for (int i = 0; i < DETECTOR_LABEL_COUNT; i++) {
     Serial.print(" ");
     Serial.print(DETECTOR_LABELS[i]);
     Serial.print("=");
-    Serial.print(output_score(i), 3);
+    Serial.print(scores[i], 3);
   }
   Serial.println();
 }
@@ -329,7 +329,7 @@ bool run_inference(float *scores, bool verbose) {
     Serial.print(last_centered_rms, 5);
     Serial.print(" p2p=");
     Serial.println(last_centered_p2p, 4);
-    print_scores();
+    print_scores(scores);
   }
 
   return true;

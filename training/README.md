@@ -12,16 +12,15 @@ Put WAV files here:
 dataset/raw/authorized_user_wake/
 dataset/raw/unknown_user_wake/
 dataset/raw/unknown_speech/
-dataset/raw/background_noise/
 ```
 
 Model classes:
 
 - `authorized_user_wake`: your voice saying "hey computer"
 - `unknown_user_wake`: someone else saying "hey computer"
-- `not_wake`: combined from `unknown_speech` + `background_noise`
+- `not_wake`: from `unknown_speech`
 
-Old clips in `dataset/raw/wake_word/` are still accepted as `authorized_user_wake`.
+Legacy folders `dataset/raw/wake_word/` and `dataset/raw/background_noise/` are now ignored by training.
 
 The script accepts common WAV sample rates and resamples to `16000 Hz`.
 
@@ -98,8 +97,6 @@ For each longer WAV file, the script creates overlapping 2 second windows every 
 
 For `authorized_user_wake`, `unknown_user_wake`, and `unknown_speech`, it keeps the loudest windows from each file. This helps when your file contains silence before or after the spoken phrase.
 
-For `background_noise`, it keeps windows spread across the file.
-
 The selected windows are saved here so you can listen to them:
 
 ```text
@@ -135,8 +132,7 @@ Still, the best training files are not huge recordings. Best first version:
 
 - `authorized_user_wake`: each file should contain your clear "hey computer", with some silence before or after
 - `unknown_user_wake`: each file should contain another person saying "hey computer"
-- `unknown_speech`: each file should contain other spoken words
-- `background_noise`: each file should contain no speech
+- `unknown_speech`: each file should contain other spoken words and non-wake audio (silence/noise is fine too)
 
 ## After Training
 
@@ -168,15 +164,12 @@ First checks:
 4. Confirm those chunks contain someone else saying the full wake phrase.
 5. Open `dataset/processed/unknown_speech/`.
 6. Confirm those do not contain the wake phrase.
-7. Open `dataset/processed/background_noise/`.
-8. Confirm those contain no speech.
 
 Then improve the data:
 
 - Add more `authorized_user_wake` recordings from you.
 - Add more `unknown_user_wake` recordings from other people.
 - Add more `unknown_speech` recordings that sound similar but are not the wake phrase.
-- Add more background recordings from the same room.
 - Retrain.
 
 For a better first model, aim for at least 30 source WAV files per label.

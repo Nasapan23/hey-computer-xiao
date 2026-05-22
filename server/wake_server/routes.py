@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
+from pydantic import BaseModel
 
 from .audio_io import safe_label, trim_pcm_to_int16, validate_pcm_headers, write_wav
 from .config import DATASET_RAW_DIR, LABEL_TO_DATASET_DIR, RECORDINGS_DIR
@@ -12,6 +13,10 @@ from .state import state
 from .transcription import load_transcription_sidecar, save_transcription_sidecar, whisper_transcriber
 
 router = APIRouter()
+
+
+class RetryTranscriptionRequest(BaseModel):
+    path: str
 
 
 def scan_recent_command_uploads(limit: int) -> list[dict]:
@@ -62,6 +67,21 @@ def transcribe_command_clip(wav_path: Path, relative_path: str) -> None:
         language=result.get("transcription_language", ""),
         error=result.get("transcription_error", ""),
     )
+
+
+def resolve_command_wav_path(relative_path: str) -> tuple[Path, str]:
+    normalized = relative_path.strip().lstrip("/\\")
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Missing recording path")
+
+    wav_path = (RECORDINGS_DIR / normalized).resolve()
+    commands_root = (RECORDINGS_DIR / "commands").resolve()
+    if wav_path.suffix.lower() != ".wav" or commands_root not in wav_path.parents:
+        raise HTTPException(status_code=400, detail="Path must point to a command WAV recording")
+    if not wav_path.exists():
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    return wav_path, wav_path.relative_to(RECORDINGS_DIR).as_posix()
 
 
 @router.get("/health")
@@ -217,6 +237,10 @@ def ui() -> str:
       cursor: pointer;
     }
     button:hover { background: #e7f0ff; }
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.65;
+    }
   </style>
 </head>
 <body>
@@ -255,6 +279,7 @@ def ui() -> str:
     const unknownEvents = document.getElementById("unknownEvents");
     const clipCount = document.getElementById("clipCount");
     const refreshBtn = document.getElementById("refreshBtn");
+    const retryableTranscriptStatuses = new Set(["no_speech", "error", "unavailable"]);
     let lastSignalsSignature = null;
     let lastCommandsSignature = null;
     let deferredCommandsRender = false;
@@ -341,7 +366,8 @@ def ui() -> str:
       }
 
       commandsList.innerHTML = items.map((item) => {
-        const status = safeMaybeText(item.transcription_status) || "pending";
+        const statusRaw = String(item.transcription_status || "").trim() || "pending";
+        const status = safeMaybeText(statusRaw);
         const transcript = safeMaybeText(item.transcript);
         const transcriptionError = safeMaybeText(item.transcription_error);
         const language = safeMaybeText(item.transcription_language);
@@ -349,6 +375,8 @@ def ui() -> str:
         const transcriptTextClass = status === "error" || status === "unavailable" ? "transcript warn" : "transcript";
         const transcriptBody = transcript || transcriptionError || (status === "pending" ? "Transcription in progress..." : "No speech detected.");
         const languageLabel = language ? `, ${language}` : "";
+        const canRetry = retryableTranscriptStatuses.has(statusRaw);
+        const retryButton = canRetry ? `<button type="button" class="retry-btn" data-path="${safeText(item.path)}">Retry transcription</button>` : "";
         return `
         <article class="item">
           <div class="row">
@@ -360,10 +388,27 @@ def ui() -> str:
           <div style="margin-bottom: 6px;">${formatTimestamp(item.timestamp)}</div>
           <audio controls preload="none" src="${safeText(item.url)}"></audio>
           <div class="${transcriptTextClass}">${safeText(transcriptBody)}</div>
+          <div style="margin-top: 8px;">${retryButton}</div>
           <div class="path">${safeText(item.path)}</div>
         </article>
       `;
       }).join("");
+    }
+
+    async function retryTranscription(path, button) {
+      const response = await fetch("/api/transcription/retry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.detail || ("Request failed: " + response.status));
+      }
+      await refresh();
+      if (button instanceof HTMLButtonElement) {
+        button.textContent = "Retry queued";
+      }
     }
 
     async function refresh() {
@@ -401,6 +446,25 @@ def ui() -> str:
     }
 
     refreshBtn.addEventListener("click", refresh);
+    commandsList.addEventListener("click", async (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      const button = target.closest("button.retry-btn");
+      if (!(button instanceof HTMLButtonElement)) return;
+      const path = button.dataset.path || "";
+      if (!path) return;
+      const originalLabel = button.textContent || "Retry transcription";
+      button.disabled = true;
+      button.textContent = "Retrying...";
+      try {
+        await retryTranscription(path, button);
+      } catch (error) {
+        button.textContent = originalLabel;
+        alert("Retry failed: " + (error && error.message ? error.message : String(error)));
+      } finally {
+        button.disabled = false;
+      }
+    });
     refresh();
     setInterval(refresh, 2000);
   </script>
@@ -453,6 +517,23 @@ async def upload_audio(
         "bits_per_sample": x_audio_bits_per_sample,
         "channels": x_audio_channels,
         "transcription_status": "pending",
+    }
+
+
+@router.post("/api/transcription/retry")
+def retry_transcription(payload: RetryTranscriptionRequest, background_tasks: BackgroundTasks) -> dict[str, str]:
+    wav_path, relative_path = resolve_command_wav_path(payload.path)
+    state.set_command_transcription(
+        relative_wav_path=relative_path,
+        status="pending",
+        transcript="",
+        language="",
+        error="",
+    )
+    background_tasks.add_task(transcribe_command_clip, wav_path, relative_path)
+    return {
+        "status": "queued",
+        "path": relative_path,
     }
 
 

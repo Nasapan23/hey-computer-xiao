@@ -7,7 +7,6 @@ Expected labels:
 - `authorized_user_wake`
 - `unknown_user_wake`
 - `unknown_speech`
-- `background_noise`
 
 Folder layout:
 
@@ -22,9 +21,6 @@ dataset/
     unknown_speech/
       hello_001.wav
       random_words_001.wav
-    background_noise/
-      room_001.wav
-      fan_001.wav
   processed/
 ```
 
@@ -45,8 +41,7 @@ For a first usable model:
 
 - `authorized_user_wake`: at least 50 clips from your voice
 - `unknown_user_wake`: at least 50 clips from other people saying the same phrase
-- `unknown_speech`: at least 100 clips
-- `background_noise`: at least 50 clips
+- `unknown_speech`: at least 100 clips (include both other speech and ambient non-wake audio)
 
 Better models usually need more data from different distances, rooms, and noise conditions. Speaker authorization specifically needs real clips from your voice and from other people saying the same phrase.
 
@@ -57,7 +52,9 @@ Better models usually need more data from different distances, rooms, and noise 
 - Include quiet and noisy rooms.
 - Include close and far microphone distances.
 - Put similar but wrong words in `unknown_speech`.
-- Put silence, fans, typing, desk noise, music, and other non-speech sounds in `background_noise`.
+- Put silence, fans, typing, desk noise, music, and other non-speech sounds in `unknown_speech`.
+
+Legacy folders `dataset/raw/wake_word/` and `dataset/raw/background_noise/` are ignored by the current trainer.
 
 ## Longer Recordings
 

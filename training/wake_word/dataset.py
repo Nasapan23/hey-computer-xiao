@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 
 from .audio import choose_windows, load_wav, preprocess_windows, slice_windows, write_preview_windows
-from .config import LABEL_SOURCE_DIRS, LABELS, SAMPLE_RATE
+from .config import LABEL_SOURCE_DIRS, LABELS, LEGACY_IGNORED_SOURCE_DIRS, SAMPLE_RATE
 
 
 def make_dataset(
@@ -14,6 +14,17 @@ def make_dataset(
     apply_rms_normalization: bool,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[dict]]:
     """Build window-level dataset and manifest from source WAV recordings."""
+    for legacy_dir in LEGACY_IGNORED_SOURCE_DIRS:
+        legacy_path = dataset_dir / "raw" / legacy_dir
+        if not legacy_path.exists():
+            continue
+        legacy_wavs = list(legacy_path.rglob("*.wav"))
+        if legacy_wavs:
+            print(
+                f"Warning: ignoring {len(legacy_wavs)} legacy WAV files in "
+                f"{legacy_path.as_posix()} (not used in current 3-class training)."
+            )
+
     examples = []
     targets = []
     sources = []
@@ -93,4 +104,3 @@ def split_dataset(
                 train_mask[index] = True
 
     return x[train_mask], y[train_mask], x[test_mask], y[test_mask]
-

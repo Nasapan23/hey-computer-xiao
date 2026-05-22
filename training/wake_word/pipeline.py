@@ -6,7 +6,24 @@ import numpy as np
 import tensorflow as tf
 
 from .augmentation import oversample_and_augment
-from .config import LABELS
+from .config import (
+    AUTHORIZED_LOSS_WEIGHT,
+    AUTHORIZED_WAKE_LABEL,
+    EARLY_STOPPING_PATIENCE,
+    LABELS,
+    LR_PLATEAU_FACTOR,
+    LR_PLATEAU_PATIENCE,
+    MODEL_DROPOUT_RATES,
+    MODEL_GAUSSIAN_NOISE_STDDEV,
+    MODEL_HIDDEN_UNITS,
+    MODEL_L2_REGULARIZATION,
+    MODEL_LEARNING_RATE,
+    MIN_LEARNING_RATE,
+    NOT_WAKE_LABEL,
+    NOT_WAKE_LOSS_WEIGHT,
+    UNKNOWN_USER_LOSS_WEIGHT,
+    UNKNOWN_USER_WAKE_LABEL,
+)
 from .dataset import make_dataset, split_dataset
 from .export import export_tflite, write_model_header
 from .features import extract_feature_batch
@@ -53,12 +70,28 @@ def train_and_export(args) -> None:
     model = build_model()
     model.summary()
 
+    class_weight = {
+        LABELS.index(AUTHORIZED_WAKE_LABEL): AUTHORIZED_LOSS_WEIGHT,
+        LABELS.index(UNKNOWN_USER_WAKE_LABEL): UNKNOWN_USER_LOSS_WEIGHT,
+        LABELS.index(NOT_WAKE_LABEL): NOT_WAKE_LOSS_WEIGHT,
+    }
+    print("Class-weighted loss:")
+    for label_index, label in enumerate(LABELS):
+        print(f"  {label}: {class_weight[label_index]:.2f}")
+
     callbacks = [
         tf.keras.callbacks.EarlyStopping(
-            monitor="val_accuracy",
-            patience=8,
+            monitor="val_loss",
+            patience=EARLY_STOPPING_PATIENCE,
             restore_best_weights=True,
-        )
+        ),
+        tf.keras.callbacks.ReduceLROnPlateau(
+            monitor="val_loss",
+            factor=LR_PLATEAU_FACTOR,
+            patience=LR_PLATEAU_PATIENCE,
+            min_lr=MIN_LEARNING_RATE,
+            verbose=1,
+        ),
     ]
 
     history = model.fit(
@@ -68,6 +101,7 @@ def train_and_export(args) -> None:
         epochs=args.epochs,
         batch_size=args.batch_size,
         callbacks=callbacks,
+        class_weight=class_weight,
         verbose=2,
     )
 
@@ -101,6 +135,18 @@ def train_and_export(args) -> None:
             "train_before_augmentation": count_labels(y_train_before_augmentation),
             "test_split": count_labels(y_test),
             "train_after_augmentation": count_labels(y_train),
+        },
+        {
+            "model_hidden_units": list(MODEL_HIDDEN_UNITS),
+            "model_dropout_rates": list(MODEL_DROPOUT_RATES),
+            "model_gaussian_noise_stddev": MODEL_GAUSSIAN_NOISE_STDDEV,
+            "model_l2_regularization": MODEL_L2_REGULARIZATION,
+            "model_learning_rate": MODEL_LEARNING_RATE,
+            "early_stopping_patience": EARLY_STOPPING_PATIENCE,
+            "lr_plateau_patience": LR_PLATEAU_PATIENCE,
+            "lr_plateau_factor": LR_PLATEAU_FACTOR,
+            "min_learning_rate": MIN_LEARNING_RATE,
+            "class_weight": {str(index): float(weight) for index, weight in class_weight.items()},
         },
     )
 

@@ -220,6 +220,7 @@ def save_training_report(
     evaluation_uses_training_data: bool,
     apply_rms_normalization: bool,
     label_count_summary: dict[str, list[int]],
+    training_setup: dict | None = None,
 ) -> None:
     """Persist all training metadata needed for debugging and report writing."""
     training_history = {key: [float(value) for value in values] for key, values in history.history.items()}
@@ -251,6 +252,7 @@ def save_training_report(
         "bandpass_highpass_cutoff_hz": BANDPASS_HIGHPASS_CUTOFF_HZ,
         "bandpass_lowpass_cutoff_hz": BANDPASS_LOWPASS_CUTOFF_HZ,
         "apply_rms_normalization": apply_rms_normalization,
+        "training_setup": training_setup or {},
         "label_count_summary": label_count_summary,
         "train_examples": train_count,
         "test_examples": test_count,

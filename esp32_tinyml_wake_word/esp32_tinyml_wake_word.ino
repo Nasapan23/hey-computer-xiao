@@ -37,10 +37,11 @@ enum DeviceMode {
 constexpr DeviceMode DEVICE_MODE = MODE_WAKE_DETECT;
 // constexpr DeviceMode DEVICE_MODE = MODE_COLLECT_DATA;
 
-constexpr float AUTHORIZED_WAKE_THRESHOLD = 0.65f;
-constexpr float UNKNOWN_USER_WAKE_THRESHOLD = 0.65f;
-constexpr float AUTHORIZED_WAKE_MARGIN = 0.10f;
-constexpr uint32_t WAKE_DEBOUNCE_MS = 3000;
+// Showcase profile: prioritize catching your authorized wake phrase.
+constexpr float AUTHORIZED_WAKE_THRESHOLD = 0.52f;
+constexpr float UNKNOWN_USER_WAKE_THRESHOLD = 0.75f;
+constexpr float AUTHORIZED_WAKE_MARGIN = 0.00f;
+constexpr uint32_t WAKE_DEBOUNCE_MS = 500;
 constexpr uint32_t UNKNOWN_WAKE_DEBOUNCE_MS = 2000;
 constexpr bool INPUT_PREEMPHASIS_ENABLED = true;
 constexpr float INPUT_PREEMPHASIS_ALPHA = 0.97f;
@@ -49,12 +50,12 @@ constexpr float INPUT_BANDPASS_HIGHPASS_CUTOFF_HZ = 80.0f;
 constexpr float INPUT_BANDPASS_LOWPASS_CUTOFF_HZ = 3600.0f;
 constexpr bool INPUT_REMOVE_DC_OFFSET = true;
 constexpr bool SPEECH_GATE_ENABLED = true;
-constexpr float SPEECH_GATE_MIN_CENTERED_RMS = 0.0010f;
-constexpr float SPEECH_GATE_MIN_P2P = 0.0100f;
+constexpr float SPEECH_GATE_MIN_CENTERED_RMS = 0.00015f;
+constexpr float SPEECH_GATE_MIN_P2P = 0.0040f;
 constexpr bool SPEECH_GATE_REQUIRE_BOTH_SIGNALS = false;
-constexpr uint32_t SPEECH_GATE_HANGOVER_MS = 500;
-constexpr bool SCORE_SMOOTHING_ENABLED = true;
-constexpr float SCORE_SMOOTHING_ALPHA = 0.35f;
+constexpr uint32_t SPEECH_GATE_HANGOVER_MS = 900;
+constexpr bool SCORE_SMOOTHING_ENABLED = false;
+constexpr float SCORE_SMOOTHING_ALPHA = 0.80f;
 constexpr float DETECTION_HOP_SECONDS = 0.25f;
 constexpr float COMMAND_CAPTURE_SECONDS = 5.0f;
 constexpr uint32_t SERIAL_SCORE_EVERY_N = 4;
@@ -225,7 +226,8 @@ void loop() {
   const bool authorized_debounce_elapsed = last_wake_ms == 0 || now - last_wake_ms >= WAKE_DEBOUNCE_MS;
   const bool unknown_debounce_elapsed = last_unknown_wake_ms == 0 || now - last_unknown_wake_ms >= UNKNOWN_WAKE_DEBOUNCE_MS;
 
-  if (is_authorized_wake(scores) && authorized_debounce_elapsed) {
+  const bool authorized_candidate = is_authorized_wake(scores);
+  if (authorized_candidate && authorized_debounce_elapsed) {
     last_wake_ms = now;
     const float wake_score = scores[AUTHORIZED_USER_WAKE_INDEX];
 
@@ -243,6 +245,14 @@ void loop() {
 
     refill_full_audio_window();
     return;
+  }
+
+  if (authorized_candidate && !authorized_debounce_elapsed && verbose) {
+    const uint32_t elapsed = now - last_wake_ms;
+    const uint32_t remaining = elapsed < WAKE_DEBOUNCE_MS ? (WAKE_DEBOUNCE_MS - elapsed) : 0;
+    Serial.print("Authorized wake score passed, but debounce active for ");
+    Serial.print(remaining);
+    Serial.println(" ms");
   }
 
   if (is_unknown_user_wake(scores) && unknown_debounce_elapsed) {
